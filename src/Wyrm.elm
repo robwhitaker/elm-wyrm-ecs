@@ -2,10 +2,7 @@ module Wyrm exposing (..)
 
 import Dict exposing (Dict)
 import Focus exposing (Focus)
-import InfiniteStream as Stream exposing (Stream)
-import Random.Pcg.Extended as Random exposing (Generator, Seed)
 import Time exposing (Time)
-import UuidStream exposing (UuidStream)
 
 
 
@@ -15,23 +12,16 @@ import UuidStream exposing (UuidStream)
 type GameState id components
     = GameState
         { entities : Dict String (Entity id components)
-        , idStream : UuidStream String
-        , randomSeedStream : Stream Seed
+        , currentId : Int
         , pageVisible : Bool
         }
 
 
-seededGameState : Int -> List Int -> GameState id components
-seededGameState firstInt extensions =
+emptyGameState : GameState id components
+emptyGameState =
     GameState
         { entities = Dict.empty
-        , idStream = UuidStream.uuidStringStream firstInt extensions
-        , randomSeedStream =
-            let
-                ( startingSeed, _ ) =
-                    Random.step Random.independentSeed (Random.initialSeed firstInt extensions)
-            in
-                Stream.iterate (Random.step Random.bool >> Tuple.second) startingSeed
+        , currentId = 0
         , pageVisible = True
         }
 
@@ -59,7 +49,7 @@ getComponents (Entity { components }) =
 
 type EntityId id
     = WithCustomId id
-    | WithGeneratedId (String -> id)
+    | WithGeneratedId (Int -> id)
 
 
 {-| add an entity, optionally with a simple name
@@ -81,21 +71,17 @@ addEntity entityId components (GameState state) =
                 }
 
             WithGeneratedId mkId ->
-                let
-                    ( uuid, newStream ) =
-                        UuidStream.consume state.idStream
-                in
-                    { state
-                        | entities =
-                            Dict.insert (toString (mkId uuid))
-                                (Entity
-                                    { id = mkId uuid
-                                    , components = components
-                                    }
-                                )
-                                state.entities
-                        , idStream = newStream
-                    }
+                { state
+                    | entities =
+                        Dict.insert (toString (mkId state.currentId))
+                            (Entity
+                                { id = mkId state.currentId
+                                , components = components
+                                }
+                            )
+                            state.entities
+                    , currentId = state.currentId + 1
+                }
 
 
 {-| get an entity by id
@@ -303,48 +289,3 @@ alsoMatchEntity maybeEntity maybeCont =
 processEntity : a -> Maybe ( Entity id components, a -> r ) -> Maybe r
 processEntity f maybeCont =
     Maybe.map ((|>) f << Tuple.second) maybeCont
-
-
-
------- INTERNALS ------
-
-
-randomWith : Generator a -> GameState id components -> ( a, GameState id components )
-randomWith generator (GameState gameState) =
-    let
-        ( seed, newStream ) =
-            Stream.consume gameState.randomSeedStream
-
-        ( value, _ ) =
-            Random.step generator seed
-    in
-        (,)
-            value
-            (GameState
-                { gameState | randomSeedStream = newStream }
-            )
-
-
-randomStreamWith : Generator a -> GameState id components -> ( Stream a, GameState id components )
-randomStreamWith generator (GameState gameState) =
-    let
-        ( seed, newStream ) =
-            Stream.consume gameState.randomSeedStream
-
-        ( independentSeed, _ ) =
-            Random.step Random.independentSeed seed
-
-        mkNewStream seed gen =
-            let
-                ( value, newSeed ) =
-                    Random.step gen seed
-            in
-                Stream.stream value (\() -> mkNewStream newSeed gen)
-    in
-        (,)
-            (mkNewStream independentSeed generator)
-            (GameState
-                { gameState
-                    | randomSeedStream = newStream
-                }
-            )
