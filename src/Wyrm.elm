@@ -1,6 +1,7 @@
 module Wyrm exposing (..)
 
 import Dict exposing (Dict)
+import Focus exposing (Focus)
 import InfiniteStream as Stream exposing (Stream)
 import Random.Pcg.Extended as Random exposing (Generator, Seed)
 import Time exposing (Time)
@@ -9,10 +10,6 @@ import UuidStream exposing (UuidStream)
 
 
 ------ CORE ------
-
-
-type alias Game userModel id components =
-    { userModel | wyrmGameState : GameState id components }
 
 
 type GameState id components
@@ -132,20 +129,26 @@ updateEntity id fn (GameState state) =
 
 type SystemRuntime userModel id components msg
     = SystemRuntime
-        { model : Game userModel id components
+        { model : userModel
         , cmds : Cmd msg
         , dt : Time
+        , gsFocus : Focus userModel (GameState id components)
         }
 
 
-getUserModel : SystemRuntime userModel id components msg -> Game userModel id components
+getUserModel : SystemRuntime userModel id components msg -> userModel
 getUserModel (SystemRuntime { model }) =
     model
 
 
+getGameStateFocus : SystemRuntime userModel id components msg -> Focus userModel (GameState id components)
+getGameStateFocus (SystemRuntime { gsFocus }) =
+    gsFocus
+
+
 getGameState : SystemRuntime userModel id components msg -> GameState id components
-getGameState (SystemRuntime { model }) =
-    model.wyrmGameState
+getGameState (SystemRuntime { model, gsFocus }) =
+    Focus.get gsFocus model
 
 
 getDeltaTime : SystemRuntime userModel id components msg -> Time
@@ -154,7 +157,7 @@ getDeltaTime (SystemRuntime { dt }) =
 
 
 mapUserModel :
-    (Game userModel id components -> Game userModel id components)
+    (userModel -> userModel)
     -> SystemRuntime userModel id components msg
     -> SystemRuntime userModel id components msg
 mapUserModel f (SystemRuntime systemRuntime) =
@@ -162,27 +165,20 @@ mapUserModel f (SystemRuntime systemRuntime) =
 
 
 mapGameState : (GameState id components -> GameState id components) -> SystemRuntime userModel id components msg -> SystemRuntime userModel id components msg
-mapGameState f (SystemRuntime systemRuntime) =
-    let
-        model =
-            systemRuntime.model
-    in
-        SystemRuntime { systemRuntime | model = { model | wyrmGameState = f model.wyrmGameState } }
+mapGameState f (SystemRuntime ({ model, gsFocus } as systemRuntime)) =
+    SystemRuntime { systemRuntime | model = Focus.update gsFocus f model }
 
 
 withGameState :
     (GameState id components -> ( value, GameState id components ))
     -> SystemRuntime userModel id components msg
     -> ( value, SystemRuntime userModel id components msg )
-withGameState f (SystemRuntime systemRuntime) =
+withGameState f (SystemRuntime ({ model, gsFocus } as systemRuntime)) =
     let
-        model =
-            systemRuntime.model
-
         ( value, newState ) =
-            f model.wyrmGameState
+            f (Focus.get gsFocus model)
     in
-        ( value, SystemRuntime { systemRuntime | model = { model | wyrmGameState = newState } } )
+        ( value, SystemRuntime { systemRuntime | model = Focus.set gsFocus newState model } )
 
 
 sendCmd : Cmd msg -> SystemRuntime userModel id components msg -> SystemRuntime userModel id components msg
@@ -195,8 +191,13 @@ type System userModel id components msg
     = System (SystemRuntime userModel id components msg -> SystemRuntime userModel id components msg)
 
 
-runSystems : Time -> Game userModel id components -> List (System userModel id components msg) -> SystemRuntime userModel id components msg
-runSystems dt userModel systems =
+runSystems :
+    Focus userModel (GameState id components)
+    -> Time
+    -> userModel
+    -> List (System userModel id components msg)
+    -> SystemRuntime userModel id components msg
+runSystems gsFocus dt userModel systems =
     List.foldl
         (\(System sysFn) systemRuntime ->
             sysFn systemRuntime
@@ -205,6 +206,7 @@ runSystems dt userModel systems =
             { model = userModel
             , dt = dt
             , cmds = Cmd.none
+            , gsFocus = gsFocus
             }
         )
         systems
@@ -240,8 +242,8 @@ processEntitiesWithAccumulator sysFn (SystemRuntime startingRuntime) startingAcc
                 gameState.entities
     in
         Dict.foldl
-            (\id _ ( (SystemRuntime systemRuntime) as runtime, acc ) ->
-                case Dict.get id (getEntities systemRuntime.model.wyrmGameState) of
+            (\id _ ( (SystemRuntime ({ model, gsFocus } as systemRuntime)) as runtime, acc ) ->
+                case Dict.get id (getEntities (Focus.get gsFocus model)) of
                     Nothing ->
                         ( runtime, acc )
 
@@ -258,46 +260,12 @@ processEntitiesWithAccumulator sysFn (SystemRuntime startingRuntime) startingAcc
                                     newRuntime
             )
             ( SystemRuntime startingRuntime, startingAcc )
-            (getEntities startingRuntime.model.wyrmGameState)
+            (getEntities (Focus.get startingRuntime.gsFocus startingRuntime.model))
             |> Tuple.first
 
 
 
 ------ COMPONENT ------
--- Updater helpers
-
-
-type ComponentFocus components comp
-    = ComponentFocus
-        { get : components -> Maybe comp
-        , set : Maybe comp -> components -> components
-        }
-
-
-createFocus : (components -> Maybe comp) -> (Maybe comp -> components -> components) -> ComponentFocus components comp
-createFocus get set =
-    ComponentFocus
-        { get = get
-        , set = set
-        }
-
-
-set : ComponentFocus components comp -> comp -> components -> components
-set (ComponentFocus { set }) comp components =
-    set (Just comp) components
-
-
-update : ComponentFocus components comp -> (Maybe comp -> Maybe comp) -> components -> components
-update (ComponentFocus { get, set }) f components =
-    set (f (get components)) components
-
-
-remove : ComponentFocus components comp -> components -> components
-remove (ComponentFocus { set }) =
-    set Nothing
-
-
-
 -- Helpers for matching entities
 
 
@@ -306,21 +274,21 @@ matchEntity =
     identity
 
 
-with : ComponentFocus components comp -> Maybe (Entity id components) -> Maybe ( Entity id components, (comp -> r) -> r )
-with (ComponentFocus { get }) maybeEntity =
+with : Focus components (Maybe comp) -> Maybe (Entity id components) -> Maybe ( Entity id components, (comp -> r) -> r )
+with c maybeEntity =
     case maybeEntity of
         Nothing ->
             Nothing
 
         Just ((Entity { components }) as entity) ->
-            Maybe.map ((,) entity << (|>)) (get components)
+            Maybe.map ((,) entity << (|>)) (Focus.get c components)
 
 
-andWith : ComponentFocus components comp -> Maybe ( Entity id components, a -> comp -> r ) -> Maybe ( Entity id components, a -> r )
-andWith (ComponentFocus { get }) =
+andWith : Focus components (Maybe comp) -> Maybe ( Entity id components, a -> comp -> r ) -> Maybe ( Entity id components, a -> r )
+andWith c =
     Maybe.andThen
         (\( (Entity { components }) as entity, cont ) ->
-            Maybe.map (\component -> (,) entity <| \c -> (|>) component (cont c)) (get components)
+            Maybe.map (\component -> (,) entity <| \c -> (|>) component (cont c)) (Focus.get c components)
         )
 
 

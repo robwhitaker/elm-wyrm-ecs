@@ -1,6 +1,7 @@
 module Wyrm.Engine exposing (..)
 
 import AnimationFrame
+import Focus exposing (Focus)
 import Html exposing (Html)
 import PageVisibility exposing (Visibility(..))
 import Time exposing (Time)
@@ -22,33 +23,35 @@ type WyrmMsg
 
 
 type alias WyrmEngineInit flags userModel id components msg =
-    { init : flags -> ( Game userModel id components, Cmd msg )
+    { init : flags -> ( userModel, Cmd msg )
     , systems : List (System userModel id components msg)
-    , update : msg -> Game userModel id components -> ( Game userModel id components, Cmd msg )
-    , view : Game userModel id components -> Html msg
-    , subscriptions : Game userModel id components -> Sub msg
+    , update : msg -> userModel -> ( userModel, Cmd msg )
+    , view : userModel -> Html msg
+    , subscriptions : userModel -> Sub msg
+    , gameStateFocus : Focus userModel (GameState id components)
     }
 
 
 wyrmUpdate :
-    (msg -> Game userModel id components -> ( Game userModel id components, Cmd msg ))
+    (msg -> userModel -> ( userModel, Cmd msg ))
     -> List (System userModel id components msg)
+    -> Focus userModel (GameState id components)
     -> Msg msg
-    -> Game userModel id components
-    -> ( Game userModel id components, Cmd (Msg msg) )
-wyrmUpdate userUpdate systems msg game =
+    -> userModel
+    -> ( userModel, Cmd (Msg msg) )
+wyrmUpdate userUpdate systems gsFocus msg game =
     case msg of
         WyrmMsg msg_ ->
             case msg_ of
                 Tick dt ->
                     let
                         (GameState { pageVisible }) =
-                            game.wyrmGameState
+                            Focus.get gsFocus game
                     in
                         if pageVisible then
                             let
                                 (SystemRuntime systemRuntime) =
-                                    runSystems dt game systems
+                                    runSystems gsFocus dt game systems
                             in
                                 ( systemRuntime.model, Cmd.map UserMsg systemRuntime.cmds )
 
@@ -56,11 +59,7 @@ wyrmUpdate userUpdate systems msg game =
                             ( game, Cmd.none )
 
                 VisibilityChange visibility ->
-                    let
-                        (GameState wyrmGameState) =
-                            game.wyrmGameState
-                    in
-                        ( { game | wyrmGameState = GameState { wyrmGameState | pageVisible = visibility == Visible } }, Cmd.none )
+                    ( Focus.update gsFocus (\(GameState gs) -> GameState { gs | pageVisible = visibility == Visible }) game, Cmd.none )
 
         UserMsg msg_ ->
             let
@@ -70,11 +69,11 @@ wyrmUpdate userUpdate systems msg game =
                 ( newState, Cmd.map UserMsg cmds )
 
 
-runGame : WyrmEngineInit flags userModel id components msg -> Program flags (Game userModel id components) (Msg msg)
+runGame : WyrmEngineInit flags userModel id components msg -> Program flags userModel (Msg msg)
 runGame init =
     Html.programWithFlags
         { init = init.init >> (\( game, msg ) -> ( game, Cmd.map UserMsg msg ))
-        , update = wyrmUpdate init.update init.systems
+        , update = wyrmUpdate init.update init.systems init.gameStateFocus
         , view = init.view >> Html.map UserMsg
         , subscriptions =
             \game ->
