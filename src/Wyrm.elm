@@ -1,4 +1,36 @@
-module Wyrm exposing (..)
+module Wyrm
+    exposing
+        ( Entity
+        , EntityId(..)
+        , GameState
+        , System
+        , SystemRuntime
+        , addEntity
+        , alsoMatchEntity
+        , andWith
+        , emptyGameState
+        , fromSystemRuntime
+        , getComponents
+        , getDeltaTime
+        , getEntities
+        , getEntity
+        , getGameState
+        , getId
+        , getUserModel
+        , mapGameState
+        , mapUserModel
+        , matchEntity
+        , processEntities
+        , processEntitiesWithAccumulator
+        , processEntity
+        , removeEntity
+        , runSystems
+        , sendCmd
+        , systemRuntime
+        , updateEntity
+        , with
+        , withGameState
+        )
 
 import Dict exposing (Dict)
 import Focus exposing (Focus)
@@ -91,6 +123,11 @@ getEntity id (GameState state) =
     Dict.get (toString id) state.entities
 
 
+getEntities : GameState id components -> Dict String (Entity id components)
+getEntities (GameState { entities }) =
+    entities
+
+
 {-| remove an entity by its id.
 -}
 removeEntity : id -> GameState id components -> GameState id components
@@ -122,14 +159,24 @@ type SystemRuntime userModel id components msg
         }
 
 
+systemRuntime : Focus userModel (GameState id components) -> Time -> userModel -> SystemRuntime userModel id components msg
+systemRuntime gsFocus dt userModel =
+    SystemRuntime
+        { model = userModel
+        , dt = dt
+        , cmds = Cmd.none
+        , gsFocus = gsFocus
+        }
+
+
+fromSystemRuntime : SystemRuntime userModel id components msg -> ( userModel, Cmd msg )
+fromSystemRuntime (SystemRuntime systemRuntime) =
+    ( systemRuntime.model, systemRuntime.cmds )
+
+
 getUserModel : SystemRuntime userModel id components msg -> userModel
 getUserModel (SystemRuntime { model }) =
     model
-
-
-getGameStateFocus : SystemRuntime userModel id components msg -> Focus userModel (GameState id components)
-getGameStateFocus (SystemRuntime { gsFocus }) =
-    gsFocus
 
 
 getGameState : SystemRuntime userModel id components msg -> GameState id components
