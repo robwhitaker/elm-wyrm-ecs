@@ -7,7 +7,7 @@ module Wyrm exposing
     , addEntity
     , alsoMatchEntity
     , andWith
-    , emptyGameState
+    , initGameState
     , fromSystemRuntime
     , getComponents
     , getDeltaTime
@@ -36,58 +36,58 @@ import Dict exposing (Dict)
 
 ------ CORE ------
 
-type alias Id = String
-
-type GameState components
+type GameState id components
     = GameState
-        { entities : Dict String (Entity components)
+        { entities : Dict String (Entity id components)
         , currentId : Int
+        , mkComparableId : id -> String
         }
 
 
-emptyGameState : GameState components
-emptyGameState =
+initGameState : (id -> String) -> GameState id components
+initGameState mkComparableId =
     GameState
         { entities = Dict.empty
         , currentId = 0
+        , mkComparableId = mkComparableId
         }
 
 
 ------ ENTITY ------
 
 
-type Entity components
+type Entity id components
     = Entity
-        { id : Id
+        { id : id
         , components : components
         }
 
 
-getId : Entity components -> Id
+getId : Entity id components -> id
 getId (Entity { id }) =
     id
 
 
-getComponents : Entity components -> components
+getComponents : Entity id components -> components
 getComponents (Entity { components }) =
     components
 
 
-type EntityId 
-    = WithCustomId Id
-    | WithGeneratedId
+type EntityId id 
+    = WithCustomId id
+    | WithGeneratedId (Int -> id)
 
 
 {-| add an entity, optionally with a simple name
 -}
-addEntity : EntityId -> components -> GameState components -> GameState components
+addEntity : EntityId id -> components -> GameState id components -> GameState id components
 addEntity entityId components (GameState state) =
     GameState <|
         case entityId of
             WithCustomId id ->
                 { state
                     | entities =
-                        Dict.insert id
+                        Dict.insert (state.mkComparableId id)
                             (Entity
                                 { id = id
                                 , components = components
@@ -96,12 +96,12 @@ addEntity entityId components (GameState state) =
                             state.entities
                 }
 
-            WithGeneratedId ->
+            WithGeneratedId mkId ->
                 { state
                     | entities =
-                        Dict.insert (String.fromInt state.currentId)
+                        Dict.insert (state.mkComparableId <| mkId state.currentId)
                             (Entity
-                                { id = String.fromInt state.currentId
+                                { id = mkId state.currentId
                                 , components = components
                                 }
                             )
@@ -110,50 +110,49 @@ addEntity entityId components (GameState state) =
                 }
 
 
-{-| get an entity by Id
+{-| get an entity by id
 -}
-getEntity : Id -> GameState components -> Maybe (Entity components)
+getEntity : id -> GameState id components -> Maybe (Entity id components)
 getEntity id (GameState state) =
-    Dict.get id state.entities
+    Dict.get (state.mkComparableId id) state.entities
 
 
-getEntities : GameState components -> Dict String (Entity components)
+getEntities : GameState id components -> Dict String (Entity id components)
 getEntities (GameState { entities }) =
     entities
 
 
-{-| remove an entity by its Id.
+{-| remove an entity by its id.
 -}
-removeEntity : Id -> GameState components -> GameState components
+removeEntity : id -> GameState id components -> GameState id components
 removeEntity id (GameState state) =
-    GameState { state | entities = Dict.remove id state.entities }
+    GameState { state | entities = Dict.remove (state.mkComparableId id) state.entities }
 
 
-{-| update an entity by its Id
+{-| update an entity by its id
 -}
-updateEntity : Id -> (components -> components) -> GameState components -> GameState components
+updateEntity : id -> (components -> components) -> GameState id components -> GameState id components
 updateEntity id fn (GameState state) =
     let
         componentLens f (Entity e) =
             Entity { e | components = f e.components }
     in
-    GameState { state | entities = Dict.update id (Maybe.map (componentLens fn)) state.entities }
-
+    GameState { state | entities = Dict.update (state.mkComparableId id) (Maybe.map (componentLens fn)) state.entities }
 
 
 ------ SYSTEM ------
 
 
-type SystemRuntime userModel components msg
+type SystemRuntime userModel id components msg
     = SystemRuntime
         { model : userModel
         , cmds : Cmd msg
         , dt : Float
-        , gsLens : Lens userModel (GameState components)
+        , gsLens : Lens userModel (GameState id components)
         }
 
 
-systemRuntime : Lens userModel (GameState components) -> Float -> userModel -> SystemRuntime userModel components msg
+systemRuntime : Lens userModel (GameState id components) -> Float -> userModel -> SystemRuntime userModel id components msg
 systemRuntime gsLens dt userModel =
     SystemRuntime
         { model = userModel
@@ -163,43 +162,43 @@ systemRuntime gsLens dt userModel =
         }
 
 
-fromSystemRuntime : SystemRuntime userModel components msg -> ( userModel, Cmd msg )
+fromSystemRuntime : SystemRuntime userModel id components msg -> ( userModel, Cmd msg )
 fromSystemRuntime (SystemRuntime sysrt) =
     ( sysrt.model, sysrt.cmds )
 
 
-getUserModel : SystemRuntime userModel components msg -> userModel
+getUserModel : SystemRuntime userModel id components msg -> userModel
 getUserModel (SystemRuntime { model }) =
     model
 
 
-getGameState : SystemRuntime userModel components msg -> GameState components
+getGameState : SystemRuntime userModel id components msg -> GameState id components
 getGameState (SystemRuntime { model, gsLens }) =
     gsLens.get model
 
 
-getDeltaTime : SystemRuntime userModel components msg -> Float
+getDeltaTime : SystemRuntime userModel id components msg -> Float
 getDeltaTime (SystemRuntime { dt }) =
     dt
 
 
 mapUserModel :
     (userModel -> userModel)
-    -> SystemRuntime userModel components msg
-    -> SystemRuntime userModel components msg
+    -> SystemRuntime userModel id components msg
+    -> SystemRuntime userModel id components msg
 mapUserModel f (SystemRuntime sysrt) =
     SystemRuntime { sysrt | model = f sysrt.model }
 
 
-mapGameState : (GameState components -> GameState components) -> SystemRuntime userModel components msg -> SystemRuntime userModel components msg
+mapGameState : (GameState id components -> GameState id components) -> SystemRuntime userModel id components msg -> SystemRuntime userModel id components msg
 mapGameState f (SystemRuntime ({ model, gsLens } as sysrt)) =
     SystemRuntime { sysrt | model = Lens.modify gsLens f model }
 
 
 withGameState :
-    (GameState components -> ( value, GameState components ))
-    -> SystemRuntime userModel components msg
-    -> ( value, SystemRuntime userModel components msg )
+    (GameState id components -> ( value, GameState id components ))
+    -> SystemRuntime userModel id components msg
+    -> ( value, SystemRuntime userModel id components msg )
 withGameState f (SystemRuntime ({ model, gsLens } as sysrt)) =
     let
         ( value, newState ) =
@@ -208,22 +207,22 @@ withGameState f (SystemRuntime ({ model, gsLens } as sysrt)) =
     ( value, SystemRuntime { sysrt | model = gsLens.set newState model } )
 
 
-sendCmd : Cmd msg -> SystemRuntime userModel components msg -> SystemRuntime userModel components msg
+sendCmd : Cmd msg -> SystemRuntime userModel id components msg -> SystemRuntime userModel id components msg
 sendCmd cmd (SystemRuntime sysrt) =
     --TODO: check on order of Cmd.batch
     SystemRuntime { sysrt | cmds = Cmd.batch [ cmd, sysrt.cmds ] }
 
 
-type System userModel components msg
-    = System (SystemRuntime userModel components msg -> SystemRuntime userModel components msg)
+type System userModel id components msg
+    = System (SystemRuntime userModel id components msg -> SystemRuntime userModel id components msg)
 
 
 runSystems :
-    Lens userModel (GameState components)
+    Lens userModel (GameState id components)
     -> Float
     -> userModel
-    -> List (System userModel components msg)
-    -> SystemRuntime userModel components msg
+    -> List (System userModel id components msg)
+    -> SystemRuntime userModel id components msg
 runSystems gsLens dt userModel systems =
     List.foldl
         (\(System sysFn) sysrt ->
@@ -240,25 +239,25 @@ runSystems gsLens dt userModel systems =
 
 
 processEntities :
-    (Entity components
-     -> SystemRuntime userModel components msg
-     -> Maybe (SystemRuntime userModel components msg)
+    (Entity id components
+     -> SystemRuntime userModel id components msg
+     -> Maybe (SystemRuntime userModel id components msg)
     )
-    -> SystemRuntime userModel components msg
-    -> SystemRuntime userModel components msg
+    -> SystemRuntime userModel id components msg
+    -> SystemRuntime userModel id components msg
 processEntities sysFn sysrt =
     processEntitiesWithAccumulator (\entity sysRT acc -> Maybe.map (\a -> (\b c -> ( b, c )) a ()) (sysFn entity sysRT)) sysrt ()
 
 
 processEntitiesWithAccumulator :
-    (Entity components
-     -> SystemRuntime userModel components msg
+    (Entity id components
+     -> SystemRuntime userModel id components msg
      -> accumulator
-     -> Maybe ( SystemRuntime userModel components msg, accumulator )
+     -> Maybe ( SystemRuntime userModel id components msg, accumulator )
     )
-    -> SystemRuntime userModel components msg
+    -> SystemRuntime userModel id components msg
     -> accumulator
-    -> SystemRuntime userModel components msg
+    -> SystemRuntime userModel id components msg
 processEntitiesWithAccumulator sysFn (SystemRuntime startingRuntime) startingAcc =
     let
         getEntities_ gs =
@@ -296,12 +295,12 @@ processEntitiesWithAccumulator sysFn (SystemRuntime startingRuntime) startingAcc
 -- Helpers for matching entities
 
 
-matchEntity : Maybe (Entity components) -> Maybe (Entity components)
+matchEntity : Maybe (Entity id components) -> Maybe (Entity id components)
 matchEntity =
     identity
 
 
-with : Lens components (Maybe comp) -> Maybe (Entity components) -> Maybe ( Entity components, (comp -> r) -> r )
+with : Lens components (Maybe comp) -> Maybe (Entity id components) -> Maybe ( Entity id components, (comp -> r) -> r )
 with c maybeEntity =
     case maybeEntity of
         Nothing ->
@@ -311,7 +310,7 @@ with c maybeEntity =
             Maybe.map ((\b -> ( entity, b )) << (|>)) (c.get components)
 
 
-andWith : Lens components (Maybe comp) -> Maybe ( Entity components, a -> comp -> r ) -> Maybe ( Entity components, a -> r )
+andWith : Lens components (Maybe comp) -> Maybe ( Entity id components, a -> comp -> r ) -> Maybe ( Entity id components, a -> r )
 andWith c =
     Maybe.andThen
         (\( (Entity { components }) as entity, cont ) ->
@@ -319,7 +318,7 @@ andWith c =
         )
 
 
-alsoMatchEntity : Maybe (Entity components) -> Maybe ( Entity components, a -> comp -> r ) -> Maybe ( Entity components, a -> comp -> r )
+alsoMatchEntity : Maybe (Entity id components) -> Maybe ( Entity id components, a -> comp -> r ) -> Maybe ( Entity id components, a -> comp -> r )
 alsoMatchEntity maybeEntity maybeCont =
     Maybe.map2
         (\entity ( _, cont ) -> ( entity, cont ))
@@ -327,6 +326,6 @@ alsoMatchEntity maybeEntity maybeCont =
         maybeCont
 
 
-processEntity : a -> Maybe ( Entity components, a -> r ) -> Maybe r
+processEntity : a -> Maybe ( Entity id components, a -> r ) -> Maybe r
 processEntity f maybeCont =
     Maybe.map ((|>) f << Tuple.second) maybeCont
