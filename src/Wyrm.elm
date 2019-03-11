@@ -7,7 +7,6 @@ module Wyrm exposing
     , addEntity
     , alsoMatchEntity
     , andWith
-    , initGameState
     , fromSystemRuntime
     , getComponents
     , getDeltaTime
@@ -16,6 +15,7 @@ module Wyrm exposing
     , getGameState
     , getId
     , getUserModel
+    , initGameState
     , mapGameState
     , mapUserModel
     , matchEntity
@@ -31,10 +31,13 @@ module Wyrm exposing
     , withGameState
     )
 
-import Monocle.Lens as Lens exposing (Lens)
 import Dict exposing (Dict)
+import Monocle.Lens as Lens exposing (Lens)
+
+
 
 ------ CORE ------
+
 
 type GameState id components
     = GameState
@@ -51,6 +54,7 @@ initGameState mkComparableId =
         , currentId = 0
         , mkComparableId = mkComparableId
         }
+
 
 
 ------ ENTITY ------
@@ -73,7 +77,7 @@ getComponents (Entity { components }) =
     components
 
 
-type EntityId id 
+type EntityId id
     = WithCustomId id
     | WithGeneratedId (Int -> id)
 
@@ -138,6 +142,7 @@ updateEntity id fn (GameState state) =
             Entity { e | components = f e.components }
     in
     GameState { state | entities = Dict.update (state.mkComparableId id) (Maybe.map (componentLens fn)) state.entities }
+
 
 
 ------ SYSTEM ------
